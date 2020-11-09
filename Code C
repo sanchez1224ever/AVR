@@ -1,0 +1,504 @@
+#define F_CPU 1000000UL
+#include <avr/io.h>
+#include <util/delay.h>
+
+//*************LCD**************
+#define RS_1 PORTA |= (1 << 0);
+#define RS_0 PORTA &= ~(1 << 0);
+#define E_1 PORTA |= (1 << 1);
+#define E_0 PORTA &= ~(1 << 1);
+//****************USI***********
+#define USISR_8BIT 0xF0 // çíà÷åíèå 4õ áèòíîãî ñ÷åò÷èêà äëÿ ïåðåäà÷è 8 áèò ïàêåòà  èíôîðìàöèè
+#define USISR_1BIT 0xFE  // çíà÷åíèå ñ÷åò÷èêà äëÿ ïåðåäà÷è 9ãî áèòà ïàêåòà èíôîðìàöèè
+#define sda 0
+#define scl 2
+//**************DS3231*************
+#define RTC_write 0xD0
+#define RTC_read 0xD1
+#define hour 0x02
+#define min	 0x01
+#define sec		0x00
+#define	week	0x03
+#define	date	0x04
+#define	month	0x05
+#define	year	0x06
+#define temper	0x11
+//************************************************Keyboard************************************************************
+#define right	60
+#define up		200
+#define down	400
+#define left	600
+#define select	800
+
+//*************************************************LCD******************************************************************
+// Îòïðàâêà êîìàíäû íà LCD
+void send_cmd_LCD (unsigned char cmd_LCD)
+{
+	PORTA=cmd_LCD;
+	RS_0;
+	E_1;
+	_delay_ms(1);
+	E_0;
+	PORTA=(cmd_LCD<<4);
+	RS_0;
+	E_1;
+	_delay_ms(1);
+	E_0;
+	_delay_us(500);
+}
+// Îòïðàâêà êîìàíäû 8 bit íà LCD
+void send_cmd_8_LCD (unsigned char cmd_8_LCD)
+{
+	PORTA=cmd_8_LCD;
+	RS_0;
+	E_1;
+	_delay_ms(10);
+	E_0;
+	_delay_ms(50);
+}
+// Îòïðàâêà äàííûõ íà LCD
+void send_data_LCD (unsigned char data_LCD)
+{
+	PORTA=data_LCD;
+	RS_1;
+	E_1;
+	_delay_ms(1);
+	E_0;
+	PORTA=(data_LCD<<4);
+	RS_1;
+	E_1;
+	_delay_ms(1);
+	E_0;
+	_delay_us(500);
+}
+// Î÷èñòêà äèñïëåÿ LCD
+void clr ()
+{
+	send_cmd_LCD(0x01);
+	_delay_ms(3);
+}
+// Ïåðåõîä íà âòîðóþ ñòðîêó íà LCD
+void second_string ()
+{
+	send_cmd_LCD(0xC0);
+	_delay_ms(1);
+}
+// Èííèöèàëèçàöèÿ äèñïëåÿ
+void init_lcd ()
+{
+	_delay_ms(300);
+	send_cmd_8_LCD(0x30);
+	send_cmd_8_LCD(0x30);
+	send_cmd_8_LCD(0x30);
+	send_cmd_8_LCD(0x20);
+	send_cmd_LCD(0x08);
+	send_cmd_LCD(0x01);
+	send_cmd_LCD(0x06);
+	send_cmd_LCD(0x0e);
+	//send_cmd_LCD(0x0c);
+}
+//*************************************************USI******************************************************************
+void init_usi_i2c ()
+{
+	DDRB |= (1 << scl);
+	DDRB |= (1 << sda);
+	USICR    =  (0<<USISIE)|(0<<USIOIE)|				// Disable Interrupts.
+	(1<<USIWM1)|(0<<USIWM0)|					// Set USI in Two-wire mode.
+	(1<<USICS1)|(0<<USICS0)|(1<<USICLK)|			// Software stobe as counter clock source
+	(0<<USITC);
+	USISR   =   (1<<USISIF)|(1<<USIOIF)|(1<<USIPF)|(1<<USIDC)|	// Clear flags,
+	(0x0<<USICNT0);
+	PORTB |= (1 << sda);
+	PORTB |= (1 << scl);
+}
+void usi_i2c_start ()
+{
+	//sbi(sdaport,sda);			// íà âñÿêèé ñëó÷àé âûñòàâëÿåì â èñõîäíîå ñîñòîÿíèå sda
+	//sbi(sclport,scl);			// òîæå ñ SCL
+	DDRB &= ~(1 << scl);		// ÂÀÆÍÎ!!! îòêëþ÷àåì SCL îò âûõîäíîãî áóôåðà èíòåðôåéñà	
+	USISR = (1<<USISIF)|(1<<USIOIF)|(1<<USIPF)|(1<<USIDC)|(0x0<<USICNT0); 	//ñáðàñûâàåì USISR
+	PORTB &= ~(1 << sda);		// ïåðåâîäèì  SDA â 0 ïîêà SCL â 1
+	_delay_us(6);		// òóïèì íàøó çàäåðæêó
+	DDRB |= (1 << scl);			// ÂÀÆÍÎ!!! ïîäêëþ÷àåì SCL îáðàòíî ê âûõîäíîìó áóôåðó èíòåðôåéñà
+	PORTB &= ~(1 << scl);		// ïåðåâîäèì SCL â 0
+	PORTB |= (1 << sda);		// îñâîáîæäàåì ëèíèþ SDA äëÿ ïîñëåäóþùåé ïåðåäà÷è/ïðèåìà äàííûõ		
+	_delay_us(6); 			// åùå ðàç òóïèì çàäåðæêó
+}
+void usi_i2c_stop () 
+{			
+	PORTB &= ~(1 << scl);			// íåîáÿçàòåëüíàÿ ïîäãîòîâêà
+	_delay_us(6);
+	PORTB &= ~(1 << sda);			
+	_delay_us(6);
+	PORTB |= (1 << scl); 			// ïåðåâîä SCL â 1
+	_delay_us(6);
+	PORTB |= (1 << sda); 			// ïåðåâîä  SDA â 1
+	_delay_us(6);
+	USISR |= (1<<USIPF); 				//ñáðîñ ôëàãà äåòåêöèè ñîñòîÿíèÿ Ñòîï â USISR
+}
+unsigned char usi_i2c_master_transfer(unsigned char tmp_sr) 
+{
+	USISR = tmp_sr; 				// Çàãðóæàåì USISR íóæíûì íàì çíà÷åíèåì
+	tmp_sr= (0<<USISIE)|(0<<USIOIE)|
+	(1<<USIWM1)|(0<<USIWM0)|
+	(1<<USICS1)|(0<<USICS0)|(1<<USICLK)|	// çàäàåì áèòîâóþ ìàñêó äëÿ USICR
+	(1<<USITC); 					// ñàìûé âàæíûé áèò. Ðàäè íåãî è ñäåëàíà ýòà ïåðåìåííàÿ
+	
+	do
+	{
+		_delay_us(6);				// êóðèì áàìáóê
+		USICR=tmp_sr; 				// çàïèíûâàåì çíà÷åíèå â USICR, èíòåðôåéñ ðàáîòàåò
+		while (PINB2 == 0); 	// ïðîâåðÿåì, ñâîáîäíà-ëè ëèíèÿ
+		_delay_us(6); 			// ñíîâà êóðèì áàìáóê
+		USICR=tmp_sr; 				// åùå ðàç çàïèíûâàåì USICR
+	}
+	while (!(USISR&(1<<USIOIF))); 		// ïîâòîðÿåì ïðåäûäóùèå îïåðàöèè äî ïåðåïîëíåíèÿ ñ÷åò÷èêà
+	_delay_us(6); 				// òóïèì â öèêëå
+	tmp_sr=USIDR; 				// ñîõðàíÿåì ïðèíÿòûå äàííûå
+	USIDR=0xff; 				// îñâîáîæäàåì ëèíèþ sda
+	DDRB |= (1 << sda);			//ÂÀÆÍÎ!!! âîññòàíàâëèâàåì  ïîäêëþ÷åíèå SDA ê âûõîäíîìó áóôåðó èíòåðôåéñà
+	return (tmp_sr); 			// Âîçâðàùàåì ïðèíÿòûå äàííûå
+}
+void i2c_master_send (unsigned char data, unsigned char data_size)
+{
+
+	//if (PINB2 == 1)  return (1);					// ïðîâåðêà, åñëè ñòàðò íå ïðîøåë — âûõîä ñ ñîñòîÿíèåì (1)
+
+	do
+	{
+		USIDR=data; 							// çàãðóæàåì î÷åðåäíîé áàéò äàííûõ
+		usi_i2c_master_transfer(USISR_8BIT); 	// ïîñûëàåì 8 áèò
+		DDRB &= ~(1 << sda); 					// ïåðåêëþàåìñÿ íà ïðèåì
+		usi_i2c_master_transfer(USISR_1BIT); 	// åñëè íåò ïîäòâåðæäåíèÿ - âûõîä (2)
+		data_size--; 							// óìåíüøàåì ñ÷åò÷èê äàííûõ
+	}
+	while (data_size > 0); 						// è òàê ïîêà âñå íå ïåðåäàäèì
+	
+	//return(0); 									// óñïåøíàÿ ïåðåäà÷à — âûõîä ñ ñîñòîÿíèåì (0)
+}
+unsigned char i2c_master_read(unsigned char data_size)
+{
+	unsigned char data_temp;
+	do
+	{
+		DDRB &= ~(1 << sda); 							// ïåðåêëþàåìñÿ íà ïðèåì
+		data_temp=usi_i2c_master_transfer(USISR_8BIT); 		// ïðèíèìàåì 8 áèò
+		
+		if (data_size==1)
+		{
+			USIDR=0xFF; 								//åñëè ïîñëåäíèé áàéò — ïåðåäàåì NACK
+		}
+		else
+		{
+			USIDR=0x00; 								// åñëè íå ïîñëåäíèé — ïåðåäàåì ïîäòâåðæäåíèå ACK
+		}
+		
+		usi_i2c_master_transfer(USISR_1BIT); 			// ñîáñòâåííî ïåðåäà÷à ACK/NACK
+		data_size--; 									// óìåíüøàåì ñ÷åò÷èê äàííûõ
+	}
+	while (data_size > 0);  				// è òàê ïîêà âñå íå ïðèìåì
+	return(data_temp); 					// óñïåøíûé ïðèåì äàííûõ, âûõîä ñ ñîñòîÿíèåì (0)
+	
+}
+//*************************************************DS3231**************************************************************
+void digit_temper(unsigned char data_temp)				// Ïðåîáðàçîâàíèå è âûâîä íà ýêðàí òåìïåðàòóðû
+{
+	unsigned char temp;
+	data_temp = data_temp - 3;						// Êàëèáððîâêà òåìïåðàòóðû
+	temp=0;
+	while (data_temp > 9)
+	{
+		data_temp-=10;
+		temp++;
+	}
+	
+	send_data_LCD('T');
+	send_data_LCD('=');
+	send_data_LCD('+');
+	temp = 0x30 + temp;
+	send_data_LCD(temp);
+	temp = 0x30 + data_temp;
+	send_data_LCD(temp);
+	send_data_LCD(0xDF);
+	send_data_LCD('C');
+}
+void time_and_date ()									// ×òåíèå è âûâîä íà ýêðàí äàòû è âðåìåíè
+{
+	unsigned char temp;
+	init_usi_i2c();
+	use_RTC(hour);					// ×òåíèå çíà÷åíèÿ ÷àñîâ
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD(':');
+	
+	use_RTC(min);					// ×òåíèå çíà÷åíèÿ ìèíóò
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD(':');
+	
+	use_RTC(sec);					// ×òåíèå çíà÷åíèÿ ñåêóíä
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD(' ');
+	
+	use_RTC(week);					// ×òåíèå çíà÷åíèÿ äíÿ íåäåëè
+	i2c_master_send(RTC_read, 1);
+	temp = i2c_master_read(1);
+	week_LCD(temp);
+	
+	second_string();
+	
+	use_RTC(date);					// ×òåíèå çíà÷åíèÿ äíÿ ìåñÿöà
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD('-');
+	
+	use_RTC(month);					// ×òåíèå çíà÷åíèÿ ìåñÿöà
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD('-');
+	
+	use_RTC(year);					// ×òåíèå çíà÷åíèÿ ãîäà
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD(' ');
+}
+void use_RTC (unsigned char adress)										// Îáùåíèå ñ ÷àñàìè
+{
+	usi_i2c_start();
+	i2c_master_send(RTC_write, 1);			// Îòïðàâêà àäðåñà ÷àñîâ
+	i2c_master_send(adress, 1);				// Îòïðàâêà àäðåñà ïàìÿòè
+	usi_i2c_stop();
+	_delay_us(6);
+	usi_i2c_start();
+	i2c_master_send(RTC_read, 1);
+}
+void digit_bcd(unsigned char data_temp)				// Ïðåîáðàçîâàíèå è âûâîä íà ýêðàí ÷àñîâ âðåìåíè è äàòû
+{
+	unsigned char temp;
+	
+	temp = data_temp;
+	temp = (temp >> 4);
+	temp = 0x30 + temp;
+	send_data_LCD(temp);
+	
+	data_temp &= ~((1 << 4)|(1 << 5)|(1 << 6));
+	data_temp = 0x30 + data_temp;
+	send_data_LCD(data_temp);
+}
+void seconds()										// Òèêàíüå ñåêóíä íà äèñïëåå
+{	
+	unsigned char tempH;
+	unsigned char tempL;
+	init_usi_i2c();
+	usi_i2c_start();
+	i2c_master_send(RTC_write, 1);			// Îòïðàâêà àäðåñà ÷àñîâ
+	i2c_master_send(0x00, 1);				// Îòïðàâêà àäðåñà ïàìÿòè â êîòîðûõ çíà÷åíèå ñåêóíä
+	usi_i2c_stop();
+	_delay_us(6);
+	usi_i2c_start();
+	i2c_master_send(RTC_read, 1);
+	tempH = i2c_master_read(1);
+	usi_i2c_stop();
+	
+	tempL = tempH;
+	tempH = (tempH >> 4);
+	tempL &= ~((1 << 4)|(1 << 5)|(1 << 6));
+	
+	if (tempH == 5)
+	{	
+		send_cmd_LCD(0x86);						// Îòïðàâêà àäðåñà ñåêóíä íà äèñïëåé
+		send_data_LCD(0x30 + tempH);
+		while (tempL <= 9)
+		{
+			send_data_LCD(0x30 + tempL);
+			tempL++;
+			send_cmd_LCD(0x87);
+			_delay_ms(985);
+		}
+	} 
+			else
+				{
+				while (tempH <= 5)
+					{
+						send_cmd_LCD(0x86);						// Îòïðàâêà àäðåñà ñåêóíä íà äèñïëåé
+						send_data_LCD(0x30 + tempH);
+						while (tempL <= 9)
+						{
+							send_data_LCD(0x30 + tempL);
+							tempL++;
+							send_cmd_LCD(0x87);
+							_delay_ms(985);
+						}
+						tempL = 0;
+						tempH++;
+						
+							
+					}
+				{
+				
+		}	
+	}
+	
+	
+	
+	
+}
+void week_LCD(unsigned char temp)					//  Âûâîä äíÿ íåäåëè
+{
+	if (temp == 7)
+	{
+		send_data_LCD('7');
+	}
+	else
+	{
+		if (temp == 6)
+		{
+			send_data_LCD('6');
+		}
+		else
+		{
+			if (temp == 5)
+			{
+				send_data_LCD('5');
+			}
+			else
+			{
+				if (temp == 4)
+				{
+					send_data_LCD('4');
+				}
+				else
+				{
+					if (temp == 3)
+					{
+						send_data_LCD('3');
+					}
+					else
+					{
+						if (temp == 2)
+						{
+							send_data_LCD('2');
+						}
+						else
+						{
+							send_data_LCD('P');
+							send_data_LCD('o');
+							send_data_LCD('n');
+							send_data_LCD('e');
+							send_data_LCD('d');
+						}
+					}
+				}
+			}
+		}
+	}
+}
+void set_time()										// Óñòàíîâêà âðåìåíè
+{
+	unsigned char temp_hour;
+	unsigned char temp_min;
+	unsigned char temp_sec;
+	unsigned char temp_week;
+	unsigned char temp_date;
+	unsigned char temp_month;
+	unsigned char temp_year;
+	
+	
+	init_usi_i2c();
+	use_RTC(hour);					// ×òåíèå çíà÷åíèÿ ÷àñîâ
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD(':');
+	
+	use_RTC(min);					// ×òåíèå çíà÷åíèÿ ìèíóò
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD(':');
+	
+	use_RTC(sec);					// ×òåíèå çíà÷åíèÿ ñåêóíä
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD(' ');
+	
+	use_RTC(week);					// ×òåíèå çíà÷åíèÿ äíÿ íåäåëè
+	i2c_master_send(RTC_read, 1);
+	temp = i2c_master_read(1);
+	week_LCD(temp);
+	
+	second_string();
+	
+	use_RTC(date);					// ×òåíèå çíà÷åíèÿ äíÿ ìåñÿöà
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD('-');
+	
+	use_RTC(month);					// ×òåíèå çíà÷åíèÿ ìåñÿöà
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD('-');
+	
+	use_RTC(year);					// ×òåíèå çíà÷åíèÿ ãîäà
+	digit_bcd(i2c_master_read(1));
+	send_data_LCD(' ');
+	
+	send_cmd_LCD(0x80);
+
+	while (read_keyboard() < 1) {_delay_ms(10000);}
+	if (read_keyboard() == 2) 
+	{
+		send_cmd_LCD(0x83);
+	}
+	
+	
+	
+	
+	
+}
+
+int read_keyboard ()				// ×òåíèå êëàâèàòóðû
+{
+	
+	ADCSR |= (1 << 6);			// Çàïóñê ÀÖÏ
+	
+	_delay_us(150);
+	
+	if (ADCW < 60) {return 1;}				// Âïðâàî
+	else if (ADCW < 200) {return 2;}		// Ââåðõ
+	else if (ADCW < 400) {return 3;}		// Âíèç
+	else if (ADCW < 600) {return 4;}		// Âëåâî
+	else if (ADCW < 800) {return 5;}		// Ñåëåêò
+		else {return 0;}
+}
+
+
+int main (void)
+{
+	DDRA=0xff;
+	PORTA=0x00;
+	
+	DDRB=0x00;
+	PORTB=0xff;
+	
+	ACSR=0x80;
+	ADMUX = 0b00001001;
+	ADCSR = 0b10000010;
+	
+	init_lcd();
+	_delay_ms(100);
+	
+	set_time();
+	
+	while (1)
+	{	
+		
+		clr();
+//******************************Îòîáðàæåíèå âðåìåíè***************************************
+		
+		time_and_date();
+//***************************** Îòîáðàæåíèå òåìïåðàòóðû************************************
+		
+		use_RTC(temper);					// ×òåíèå çíà÷åíèÿ òåìïåðàòóðû
+		digit_temper(i2c_master_read(1));
+		usi_i2c_stop();
+		
+		seconds();								// Òèêàíüå ñåêóíä
+
+		
+		
+		//_delay_ms(10000);
+		
+	}
+}
+
+
+
